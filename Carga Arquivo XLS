@@ -1,0 +1,250 @@
+REPORT zhrbrxx_0007  NO STANDARD PAGE HEADING.
+
+TABLES: hrp1001, t7brcb.
+
+TYPES:   BEGIN OF t_datatab ,
+         col1(08)  TYPE n,
+         col2(06)  TYPE n,
+*         col3(30)  TYPE c,
+*         col4(30)  TYPE c,
+*         col5(30)  TYPE c,
+*         col6(30)  TYPE c,
+*         col7(30) TYPE c,
+*         col8(30)  TYPE c,
+*         col9(30)  TYPE c,
+*         col10(30)  TYPE c,
+*         col11(30)    TYPE c,
+       END OF t_datatab.
+*DATA: it_datatab TYPE STANDARD TABLE OF t_datatab INITIAL SIZE 0,
+DATA: it_datatab TYPE t_datatab OCCURS 0 WITH HEADER LINE,
+      wa_datatab TYPE t_datatab.
+
+DATA: t_p1001  TYPE hrp1001 OCCURS 0 WITH HEADER LINE,
+      t_altera TYPE t7brcb  OCCURS 0 WITH HEADER LINE,
+      t_insere TYPE t7brcb  OCCURS 0 WITH HEADER LINE,
+      t_t7brcb TYPE t7brcb  OCCURS 0 WITH HEADER LINE.
+
+DATA : gd_scol   TYPE i VALUE '1',
+       gd_srow   TYPE i VALUE '1',
+       gd_ecol   TYPE i VALUE '256',
+       gd_erow   TYPE i VALUE '65536'.
+
+DATA: it_tab TYPE filetable,
+      vg_data like sy-datum value '20051231',
+      gd_subrc TYPE i.
+
+
+
+*Selection screen definition
+SELECTION-SCREEN BEGIN OF BLOCK b1 WITH FRAME TITLE text-001.
+PARAMETERS:  p_file LIKE rlgrap-filename
+               DEFAULT 'c:\teste.xls' OBLIGATORY,   " File Name
+             P_MOD   AS CHECKBOX,
+             P_TESTE AS CHECKBOX.
+SELECTION-SCREEN END OF BLOCK b1.
+
+
+***********************************************************************
+* AT SELECTION-SCREEN
+AT SELECTION-SCREEN ON VALUE-REQUEST FOR p_file.
+  REFRESH: it_tab.
+  CALL METHOD cl_gui_frontend_services=>file_open_dialog
+    EXPORTING
+      window_title     = 'Select File'
+      default_filename = '*.xls'
+      multiselection   = ' '
+    CHANGING
+      file_table       = it_tab
+      rc               = gd_subrc.
+
+  LOOP AT it_tab INTO p_file.
+*    so_fpath-sign = 'I'.
+*    so_fpath-option = 'EQ'.
+*    append so_fpath.
+  ENDLOOP.
+
+
+***********************************************************************
+* START-OF-SELECTION.
+START-OF-SELECTION.
+  PERFORM upload_excel_file TABLES   it_datatab
+                             USING   p_file
+                                     gd_scol
+                                     gd_srow
+                                     gd_ecol
+                                     gd_erow.
+
+  IF NOT it_datatab[] IS INITIAL.
+    SELECT * INTO TABLE t_p1001
+      FROM hrp1001
+      FOR ALL ENTRIES IN it_datatab
+      WHERE otype = 'S '              AND
+            objid = it_datatab-col1   AND
+            plvar = '01'              AND
+            relat = '007'             AND
+            endda = '99991231'.
+
+    SELECT * INTO TABLE t_t7brcb
+      FROM t7brcb
+      FOR ALL ENTRIES IN it_datatab
+      WHERE plans = it_datatab-col1.
+
+  ENDIF.
+
+  SORT t_p1001 BY objid.
+
+  SORT t_t7brcb BY plans endda DESCENDING.
+
+  LOOP AT it_datatab.
+
+    CLEAR: t_t7brcb.
+    READ TABLE t_t7brcb WITH KEY plans = it_datatab-col1
+                                 BINARY SEARCH.
+
+    IF sy-subrc = 0.
+      IF t_t7brcb-endda > vg_data.
+        CLEAR: t_altera.
+        t_altera = t_t7brcb.
+        t_altera-cbo = it_datatab-col2.
+        append t_altera.
+      ELSE.
+        CLEAR: t_insere.
+        t_insere-plans = it_datatab-col1.
+        t_insere-endda = '99991231'.
+        t_insere-begda = t_t7brcb-endda + 1.
+        t_insere-cbo   = it_datatab-col2.
+        append t_insere.
+      ENDIF.
+
+    ELSE.
+
+      clear: t_p1001.
+      READ TABLE t_p1001 WITH KEY objid = it_datatab-col1
+                                  BINARY SEARCH.
+
+      IF sy-subrc = 0.
+        CLEAR: t_insere.
+        t_insere-plans = it_datatab-col1.
+        t_insere-endda = t_p1001-endda.
+        t_insere-begda = t_p1001-begda.
+        t_insere-cbo   = it_datatab-col2.
+        append t_insere.
+      ELSE.
+        CLEAR: t_insere.
+        t_insere-plans = it_datatab-col1.
+        t_insere-endda = '99991231'.
+        t_insere-begda = '19000101'.
+        t_insere-cbo   = it_datatab-col2.
+        append t_insere.
+      ENDIF.
+    ENDIF.
+
+  ENDLOOP.
+
+
+
+
+***********************************************************************
+* END-OF-SELECTION.
+END-OF-SELECTION.
+
+write: /01 'REGISTROS CRIADOS NA TABELA T7BRCB'.
+
+  LOOP AT t_insere.
+    WRITE:/ t_insere-plans,
+            t_insere-endda,
+            t_insere-begda,
+            t_insere-cbo.
+    if p_teste = ' '.
+      CLEAR T7BRCB.
+      t7brcb = t_insere.
+      modify t7brcb.
+    endif.
+
+  ENDLOOP.
+
+CHECK NOT P_MOD IS INITIAL.
+
+skip 2.
+write: /01 'REGISTROS MODIFICADOS NA TABELA T7BRCB'.
+
+  LOOP AT t_ALTERA.
+    WRITE:/ t_ALTERA-plans,
+            t_ALTERA-endda,
+            t_ALTERA-begda,
+            t_ALTERA-cbo.
+    if p_teste = ' '.
+      CLEAR T7BRCB.
+      t7brcb = t_ALTERA.
+      modify t7brcb.
+    endif.
+
+  ENDLOOP.
+
+
+*&--------------------------------------------------------------------*
+*&      Form  UPLOAD_EXCEL_FILE
+*&--------------------------------------------------------------------*
+*       upload excel spreadsheet into internal table
+*---------------------------------------------------------------------*
+*      -->P_TABLE    Table to return excel data into
+*      -->P_FILE     file name and path
+*      -->P_SCOL     start column
+*      -->P_SROW     start row
+*      -->P_ECOL     end column
+*      -->P_EROW     end row
+*---------------------------------------------------------------------*
+FORM upload_excel_file TABLES   p_table
+                       USING    p_file
+                                p_scol
+                                p_srow
+                                p_ecol
+                                p_erow.
+
+  DATA : lt_intern TYPE  kcde_cells OCCURS 0 WITH HEADER LINE.
+* Has the following format:
+*             Row number   | Colum Number   |   Value
+*             ---------------------------------------
+*      i.e.     1                 1             Name1
+*               2                 1             Joe
+
+  DATA : ld_index TYPE i.
+  FIELD-SYMBOLS : <fs>.
+
+* Note: Alternative function module - 'ALSM_EXCEL_TO_INTERNAL_TABLE'
+  CALL FUNCTION 'KCD_EXCEL_OLE_TO_INT_CONVERT'
+    EXPORTING
+      filename                = p_file
+      i_begin_col             = p_scol
+      i_begin_row             = p_srow
+      i_end_col               = p_ecol
+      i_end_row               = p_erow
+    TABLES
+      intern                  = lt_intern
+    EXCEPTIONS
+      inconsistent_parameters = 1
+      upload_ole              = 2
+      OTHERS                  = 3.
+  IF sy-subrc <> 0.
+    FORMAT COLOR COL_BACKGROUND INTENSIFIED.
+    WRITE:/ 'Error Uploading file'.
+    EXIT.
+  ENDIF.
+
+  IF lt_intern[] IS INITIAL.
+    FORMAT COLOR COL_BACKGROUND INTENSIFIED.
+    WRITE:/ 'No Data Uploaded'.
+    EXIT.
+  ELSE.
+    SORT lt_intern BY row col.
+    LOOP AT lt_intern.
+      MOVE lt_intern-col TO ld_index.
+      ASSIGN COMPONENT ld_index OF STRUCTURE p_table TO <fs>.
+      MOVE lt_intern-value TO <fs>.
+      AT END OF row.
+        APPEND p_table.
+        CLEAR p_table.
+      ENDAT.
+    ENDLOOP.
+  ENDIF.
+ENDFORM.                    "UPLOAD_EXCEL_FILE
